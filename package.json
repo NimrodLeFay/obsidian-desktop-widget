@@ -1,0 +1,37 @@
+{
+  "name": "obsidian-graph-widget",
+  "version": "1.0.0",
+  "description": "Floating Obsidian graph widget for desktop",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac"
+  },
+  "keywords": [],
+  "author": "Aditya Gahlot",
+  "license": "ISC",
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "d3": "^7.9.0",
+    "electron": "^42.3.3"
+  },
+  "devDependencies": {
+    "electron-builder": "^26.15.0"
+  },
+  "build": {
+    "appId": "com.obsidian.graph-widget",
+    "productName": "Obsidian Graph Widget",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity"
+    }
+  }
+}

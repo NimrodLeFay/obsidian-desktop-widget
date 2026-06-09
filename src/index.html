@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Obsidian Graph Widget</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+
+/* ── Themes ──────────────────────────────────────────────────── */
+:root {
+  --node-default:#7c7c7c; --node-center:#a78bfa; --node-backlink:#818cf8;
+  --node-recent:#34d399;  --node-tagged:#7dd3fc;  --node-outlink:#60a5fa;
+  --link-base:rgba(255,255,255,0.07); --link-hot:rgba(167,139,250,0.55);
+  --text:#ddd; --text-dim:rgba(255,255,255,0.38);
+  --accent:#7c3aed; --accent-glow:rgba(124,58,237,0.3);
+  --panel:rgba(13,13,18,0.93); --border:rgba(255,255,255,0.09);
+  --hover:rgba(255,255,255,0.07);
+  --focus-ring:rgba(124,58,237,0.5);
+  --tag-bg:rgba(124,58,237,0.18); --tag-text:#c4b5fd;
+}
+[data-theme="nebula"] {
+  --node-default:#8b6bab; --node-center:#f472b6; --node-backlink:#e879f9;
+  --node-recent:#fb923c;  --node-tagged:#38bdf8;  --node-outlink:#a78bfa;
+  --link-base:rgba(244,114,182,0.1); --link-hot:rgba(244,114,182,0.5);
+  --accent:#db2777; --accent-glow:rgba(219,39,119,0.3);
+  --panel:rgba(15,8,20,0.93); --border:rgba(244,114,182,0.12);
+  --tag-bg:rgba(219,39,119,0.18); --tag-text:#f9a8d4;
+}
+[data-theme="forest"] {
+  --node-default:#5a8a6a; --node-center:#4ade80; --node-backlink:#86efac;
+  --node-recent:#facc15;  --node-tagged:#67e8f9;  --node-outlink:#a3e635;
+  --link-base:rgba(74,222,128,0.08); --link-hot:rgba(74,222,128,0.45);
+  --accent:#16a34a; --accent-glow:rgba(22,163,74,0.3);
+  --panel:rgba(5,15,10,0.93); --border:rgba(74,222,128,0.1);
+  --tag-bg:rgba(22,163,74,0.18); --tag-text:#86efac;
+}
+[data-theme="amber"] {
+  --node-default:#a08040; --node-center:#fbbf24; --node-backlink:#f59e0b;
+  --node-recent:#fb923c;  --node-tagged:#34d399;  --node-outlink:#fde68a;
+  --link-base:rgba(251,191,36,0.08); --link-hot:rgba(251,191,36,0.45);
+  --accent:#d97706; --accent-glow:rgba(217,119,6,0.3);
+  --panel:rgba(15,10,3,0.93); --border:rgba(251,191,36,0.1);
+  --tag-bg:rgba(217,119,6,0.18); --tag-text:#fde68a;
+}
+[data-theme="ice"] {
+  --node-default:#5a8aaa; --node-center:#7dd3fc; --node-backlink:#93c5fd;
+  --node-recent:#f0abfc;  --node-tagged:#6ee7b7;  --node-outlink:#e0f2fe;
+  --link-base:rgba(125,211,252,0.07); --link-hot:rgba(125,211,252,0.45);
+  --accent:#0284c7; --accent-glow:rgba(2,132,199,0.3);
+  --panel:rgba(3,10,20,0.93); --border:rgba(125,211,252,0.1);
+  --tag-bg:rgba(2,132,199,0.18); --tag-text:#bae6fd;
+}
+
+html, body {
+  width:100%; height:100%; background:transparent; overflow:hidden;
+  font-family:-apple-system,'Inter','Segoe UI',sans-serif; user-select:none;
+  -webkit-font-smoothing:antialiased;
+}
+#app { width:100%; height:100%; position:relative; background:transparent; }
+svg#graph { width:100%; height:100%; position:absolute; inset:0; background:transparent; }
+
+/* ── Drag handle (frameless window move) ─────────────────────── */
+#drag-handle {
+  position:absolute; top:0; left:0; right:0; height:28px;
+  -webkit-app-region:drag; z-index:10; pointer-events:none;
+}
+
+/* ══ LEFT SLIDE-OUT PANEL ════════════════════════════════════════ */
+#panel-tab {
+  position:absolute; top:50%; left:0;
+  transform:translateY(-50%);
+  width:14px; height:60px;
+  background:var(--panel);
+  border:1px solid var(--border); border-left:none;
+  border-radius:0 7px 7px 0;
+  cursor:pointer; z-index:210;
+  display:flex; align-items:center; justify-content:center;
+  transition:width 0.18s, background 0.15s;
+  backdrop-filter:blur(12px);
+}
+#panel-tab:hover { width:19px; background:rgba(30,20,50,0.97); }
+#panel-tab-icon { font-size:9px; color:var(--text-dim); writing-mode:vertical-rl; letter-spacing:2px; pointer-events:none; }
+
+#control-panel {
+  position:absolute; top:0; left:0; bottom:0; width:240px;
+  background:var(--panel); border-right:1px solid var(--border);
+  backdrop-filter:blur(22px);
+  transform:translateX(-240px);
+  transition:transform 0.22s cubic-bezier(.4,0,.2,1);
+  z-index:200; display:flex; flex-direction:column; overflow:hidden;
+}
+#control-panel.open { transform:translateX(0); }
+
+.panel-header {
+  padding:14px 14px 10px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; justify-content:space-between;
+  -webkit-app-region:drag; flex-shrink:0;
+}
+.panel-logo { font-size:13px; font-weight:700; color:var(--text); letter-spacing:-0.02em; }
+.panel-logo span { color:var(--accent); }
+#panel-close-btn {
+  width:22px; height:22px; border-radius:4px; border:none;
+  background:transparent; color:var(--text-dim); cursor:pointer;
+  font-size:13px; display:flex; align-items:center; justify-content:center;
+  -webkit-app-region:no-drag; transition:all 0.13s;
+}
+#panel-close-btn:hover { background:rgba(239,68,68,0.15); color:#fca5a5; }
+
+.panel-scroll {
+  flex:1; overflow-y:auto; padding:10px 12px;
+  display:flex; flex-direction:column; gap:12px;
+}
+.panel-scroll::-webkit-scrollbar { width:3px; }
+.panel-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+.section-label {
+  font-size:9px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase;
+  color:var(--text-dim); margin-bottom:6px;
+}
+
+/* Mode buttons */
+.mode-btn {
+  width:100%; padding:7px 9px; border-radius:5px; border:1px solid transparent;
+  background:transparent; color:var(--text-dim); font-size:12px; cursor:pointer;
+  text-align:left; display:flex; align-items:center; gap:7px; transition:all 0.13s;
+}
+.mode-btn:hover { background:var(--hover); color:var(--text); border-color:var(--border); }
+.mode-btn.active { background:rgba(124,58,237,0.15); border-color:var(--focus-ring); color:#c4b5fd; font-weight:600; }
+[data-theme="nebula"]  .mode-btn.active { color:#f9a8d4; border-color:rgba(219,39,119,0.5); background:rgba(219,39,119,0.12); }
+[data-theme="forest"]  .mode-btn.active { color:#86efac; border-color:rgba(22,163,74,0.5);  background:rgba(22,163,74,0.12); }
+[data-theme="amber"]   .mode-btn.active { color:#fde68a; border-color:rgba(217,119,6,0.5);  background:rgba(217,119,6,0.12); }
+[data-theme="ice"]     .mode-btn.active { color:#bae6fd; border-color:rgba(2,132,199,0.5);  background:rgba(2,132,199,0.12); }
+
+/* Search */
+.search-wrap { position:relative; }
+input.search-input {
+  width:100%; padding:6px 9px; border-radius:5px;
+  background:rgba(255,255,255,0.06); border:1px solid var(--border);
+  color:var(--text); font-size:12px; outline:none; transition:border-color 0.15s;
+}
+input.search-input:focus { border-color:var(--focus-ring); }
+input.search-input::placeholder { color:var(--text-dim); }
+#search-results {
+  position:absolute; top:calc(100% + 4px); left:0; right:0;
+  background:var(--panel); border:1px solid var(--border); border-radius:6px;
+  max-height:160px; overflow-y:auto; z-index:400; backdrop-filter:blur(18px);
+}
+.sr-item {
+  padding:6px 10px; font-size:11px; color:var(--text-dim); cursor:pointer;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:all 0.1s;
+}
+.sr-item:hover, .sr-item.sel { background:var(--hover); color:var(--text); }
+
+/* Sliders */
+.slider-row { display:flex; align-items:center; gap:8px; }
+.slider-label { font-size:11px; color:var(--text-dim); min-width:36px; }
+.slider-val { font-size:11px; color:var(--text); min-width:28px; text-align:right; font-variant-numeric:tabular-nums; }
+input[type=range] {
+  flex:1; height:4px; border-radius:2px;
+  appearance:none; background:var(--border); cursor:pointer; outline:none;
+}
+input[type=range]::-webkit-slider-thumb {
+  appearance:none; width:13px; height:13px; border-radius:50%;
+  background:var(--accent); cursor:pointer; transition:transform 0.1s;
+}
+input[type=range]::-webkit-slider-thumb:hover { transform:scale(1.25); }
+
+/* Themes */
+.theme-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; }
+.theme-dot {
+  width:30px; height:30px; border-radius:50%; cursor:pointer;
+  border:2px solid transparent; transition:all 0.15s;
+}
+.theme-dot.active { border-color:rgba(255,255,255,0.8); transform:scale(1.18); box-shadow:0 0 10px rgba(255,255,255,0.2); }
+.theme-dot:hover:not(.active) { transform:scale(1.08); }
+
+/* Toggles */
+.toggle-row { display:flex; align-items:center; justify-content:space-between; padding:3px 0; }
+.toggle-label { font-size:12px; color:var(--text-dim); }
+.toggle {
+  width:34px; height:18px; border-radius:9px; position:relative; cursor:pointer;
+  background:rgba(255,255,255,0.12); border:none; transition:background 0.2s; flex-shrink:0;
+}
+.toggle.on { background:var(--accent); }
+.toggle::after {
+  content:''; position:absolute; top:3px; left:3px;
+  width:12px; height:12px; border-radius:50%; background:white; transition:left 0.18s;
+}
+.toggle.on::after { left:19px; }
+
+/* Action buttons */
+.act-btn {
+  width:100%; padding:7px 10px; border-radius:5px;
+  background:rgba(255,255,255,0.05); border:1px solid var(--border);
+  color:var(--text-dim); font-size:11px; cursor:pointer; text-align:left;
+  transition:all 0.13s; display:flex; align-items:center; gap:6px;
+}
+.act-btn:hover { background:var(--hover); color:var(--text); }
+.act-btn.danger:hover { background:rgba(239,68,68,0.12); color:#fca5a5; border-color:rgba(239,68,68,0.25); }
+
+/* ══ CORNER CONTROLS ══════════════════════════════════════════════ */
+#corner-controls {
+  position:absolute; top:8px; right:8px; z-index:210;
+  display:flex; gap:4px;
+}
+.icon-btn {
+  width:26px; height:26px; border-radius:5px; border:1px solid var(--border);
+  background:var(--panel); backdrop-filter:blur(12px);
+  color:var(--text-dim); font-size:12px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:all 0.13s; -webkit-app-region:no-drag;
+}
+.icon-btn:hover { color:var(--text); background:var(--hover); }
+.icon-btn.danger:hover { background:rgba(239,68,68,0.15); color:#fca5a5; border-color:rgba(239,68,68,0.3); }
+.icon-btn.on { color:var(--node-center); border-color:var(--focus-ring); opacity:1 !important; }
+
+/* ══ TOOLTIP ══════════════════════════════════════════════════════ */
+#tooltip {
+  position:absolute; background:var(--panel); border:1px solid var(--border);
+  border-radius:8px; padding:9px 12px; font-size:12px; color:var(--text);
+  pointer-events:none; opacity:0; transition:opacity 0.12s;
+  backdrop-filter:blur(16px); z-index:500; max-width:240px; min-width:160px;
+}
+#tooltip.show { opacity:1; pointer-events:all; }
+.tt-name { font-weight:700; color:var(--node-center); margin-bottom:3px; font-size:13px; }
+.tt-meta { font-size:10px; color:var(--text-dim); line-height:1.6; }
+.tt-tags { display:flex; flex-wrap:wrap; gap:3px; margin-top:5px; }
+.tt-tag { font-size:9px; padding:2px 7px; border-radius:10px; background:var(--tag-bg); color:var(--tag-text); }
+.tt-actions { display:flex; gap:4px; margin-top:8px; padding-top:7px; border-top:1px solid var(--border); }
+.tt-act-btn {
+  flex:1; padding:4px 2px; border-radius:4px; border:1px solid var(--border);
+  background:rgba(255,255,255,0.04); color:var(--text-dim); font-size:10px;
+  cursor:pointer; text-align:center; transition:all 0.13s; pointer-events:all;
+}
+.tt-act-btn:hover { background:var(--hover); color:var(--text); }
+
+/* ══ NOTE PREVIEW PANEL (RIGHT) ══════════════════════════════════ */
+#note-preview {
+  position:absolute; right:10px; top:44px; bottom:10px; width:290px;
+  background:var(--panel); border:1px solid var(--border); border-radius:9px;
+  backdrop-filter:blur(18px);
+  z-index:300;          /* above focus-sidebar (z:200), below tooltip (z:500) */
+  display:none; flex-direction:column; overflow:hidden;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4);
+}
+#note-preview.show { display:flex; }
+#preview-header {
+  padding:11px 13px 9px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px; flex-shrink:0;
+}
+#preview-title {
+  font-size:13px; font-weight:700; color:var(--text); flex:1;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+#preview-close {
+  background:transparent; border:none; color:var(--text-dim); cursor:pointer;
+  font-size:14px; padding:2px 4px; border-radius:3px; transition:all 0.1s; flex-shrink:0;
+}
+#preview-close:hover { color:var(--text); }
+#preview-meta {
+  font-size:10px; color:var(--text-dim); padding:5px 13px 6px;
+  border-bottom:1px solid var(--border); flex-shrink:0; line-height:1.5;
+}
+#preview-body {
+  flex:1; overflow-y:auto; padding:11px 13px;
+  font-size:12px; color:var(--text); line-height:1.75;
+  white-space:pre-wrap; word-break:break-word;
+}
+#preview-body::-webkit-scrollbar { width:3px; }
+#preview-body::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+#preview-body b { color:var(--node-center); font-weight:600; }
+#preview-body .wikilink { color:var(--node-tagged); cursor:pointer; }
+#preview-body .wikilink:hover { text-decoration:underline; }
+#preview-actions {
+  padding:8px 12px; border-top:1px solid var(--border);
+  display:flex; gap:6px; flex-shrink:0;
+}
+.preview-act-btn {
+  flex:1; padding:6px 4px; border-radius:5px; border:1px solid var(--border);
+  background:rgba(255,255,255,0.05); color:var(--text-dim); font-size:11px;
+  cursor:pointer; text-align:center; transition:all 0.13s;
+}
+.preview-act-btn:hover { background:var(--hover); color:var(--text); }
+.preview-act-btn.accent {
+  background:rgba(124,58,237,0.16); border-color:var(--focus-ring); color:#c4b5fd;
+}
+.preview-act-btn.accent:hover { background:rgba(124,58,237,0.28); color:#e4d9ff; }
+
+/* ══ FOCUS SIDEBAR (LEFT, ABOVE MAIN PANEL) ══════════════════════ */
+#focus-sidebar {
+  position:absolute; left:0; top:0; bottom:0; width:210px;
+  background:var(--panel); border-right:1px solid var(--border);
+  backdrop-filter:blur(18px);
+  z-index:195;          /* below control-panel (z:200), so main panel slides over it */
+  display:none; flex-direction:column; overflow:hidden;
+  transform:translateX(0);
+}
+#focus-sidebar.show { display:flex; }
+/* When main panel is open, push focus sidebar right */
+#control-panel.open ~ #focus-sidebar { transform:translateX(240px); transition:transform 0.22s cubic-bezier(.4,0,.2,1); }
+
+#focus-header {
+  padding:13px 12px 9px; border-bottom:1px solid var(--border); flex-shrink:0;
+}
+#focus-note-name {
+  font-size:13px; font-weight:700; color:var(--node-center);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+#focus-note-meta { font-size:10px; color:var(--text-dim); margin-top:2px; }
+#focus-open-btn {
+  margin-top:7px; width:100%; padding:5px 8px; border-radius:5px;
+  background:rgba(124,58,237,0.14); border:1px solid var(--focus-ring);
+  color:#c4b5fd; font-size:11px; cursor:pointer; text-align:center; transition:all 0.13s;
+}
+#focus-open-btn:hover { background:rgba(124,58,237,0.28); color:#e4d9ff; }
+
+#focus-tabs { display:flex; border-bottom:1px solid var(--border); flex-shrink:0; }
+.focus-tab {
+  flex:1; padding:7px 4px; text-align:center; font-size:10px; font-weight:700;
+  letter-spacing:0.05em; text-transform:uppercase; color:var(--text-dim);
+  cursor:pointer; border-bottom:2px solid transparent; transition:all 0.15s;
+}
+.focus-tab.active { color:var(--node-center); border-bottom-color:var(--node-center); }
+.focus-tab:hover:not(.active) { color:var(--text); }
+
+#focus-list { flex:1; overflow-y:auto; padding:5px 6px; }
+#focus-list::-webkit-scrollbar { width:3px; }
+#focus-list::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+.focus-item {
+  padding:7px 9px; border-radius:6px; cursor:pointer;
+  transition:all 0.12s; margin-bottom:2px; border:1px solid transparent;
+}
+.focus-item:hover { background:var(--hover); border-color:var(--border); }
+.focus-item.selected { background:rgba(124,58,237,0.12); border-color:var(--focus-ring); }
+.fi-badge {
+  display:inline-block; font-size:8px; padding:1px 6px; border-radius:4px;
+  margin-bottom:3px; font-weight:700; letter-spacing:0.06em;
+}
+.fi-badge.backlink { background:rgba(129,140,248,0.2); color:#818cf8; }
+.fi-badge.outlink  { background:rgba(96,165,250,0.2);  color:#60a5fa; }
+.fi-badge.recent   { background:rgba(52,211,153,0.18); color:#34d399; }
+.fi-name { font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fi-meta { font-size:9px; color:var(--text-dim); margin-top:2px; }
+
+/* ══ SETUP SCREEN ════════════════════════════════════════════════ */
+#setup-screen {
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  background:rgba(8,8,14,0.96); flex-direction:column; gap:14px; z-index:600;
+  border-radius:8px; border:1px solid var(--border); backdrop-filter:blur(24px);
+}
+#setup-screen.hidden { display:none; }
+.setup-icon { font-size:44px; }
+.setup-title { font-size:18px; font-weight:700; color:var(--text); letter-spacing:-0.02em; }
+.setup-sub { font-size:12px; color:var(--text-dim); text-align:center; max-width:240px; line-height:1.65; }
+.setup-btn {
+  background:linear-gradient(135deg,var(--accent),#6d28d9); border:none;
+  border-radius:8px; color:white; font-size:13px; font-weight:600;
+  padding:11px 24px; cursor:pointer;
+  box-shadow:0 0 24px var(--accent-glow); transition:all 0.2s;
+}
+.setup-btn:hover { transform:translateY(-1px); box-shadow:0 6px 30px var(--accent-glow); }
+
+/* ══ LEGEND + STATS — hover-only ══════════════════════════════════ */
+#legend {
+  position:absolute; bottom:10px; right:10px;
+  background:var(--panel); border:1px solid var(--border); border-radius:7px;
+  padding:8px 11px; backdrop-filter:blur(12px);
+  z-index:100; pointer-events:none;
+  opacity:0; transition:opacity 0.25s;
+}
+#stats {
+  position:absolute; bottom:10px; left:10px;
+  background:var(--panel); border:1px solid var(--border); border-radius:6px;
+  padding:5px 10px;
+  font-size:10px; color:var(--text-dim); z-index:100;
+  pointer-events:none; letter-spacing:0.05em;
+  opacity:0; transition:opacity 0.25s;
+  backdrop-filter:blur(12px);
+}
+/* Show both when hovering anywhere on the app */
+#app:hover #legend,
+#app:hover #stats { opacity:1; }
+
+.leg-item { display:flex; align-items:center; gap:7px; font-size:10px; color:var(--text-dim); margin-bottom:4px; }
+.leg-item:last-child { margin-bottom:0; }
+.leg-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+
+/* ══ BRIEF STATUS MESSAGE ═════════════════════════════════════════ */
+#brief-msg {
+  position:absolute; bottom:48px; left:50%; transform:translateX(-50%);
+  background:rgba(30,20,50,0.96); border:1px solid var(--border);
+  border-radius:6px; padding:6px 16px; font-size:11px; color:var(--text);
+  z-index:600; pointer-events:none; opacity:0; transition:opacity 0.2s;
+  white-space:nowrap; backdrop-filter:blur(12px);
+}
+#brief-msg.show { opacity:1; }
+</style>
+</head>
+<body>
+<div id="app">
+<div id="drag-handle"></div>
+
+<!-- ── Setup screen ─────────────────────────────────────────────── -->
+<div id="setup-screen">
+  <div class="setup-icon">🔮</div>
+  <div class="setup-title">Obsidian Graph Widget</div>
+  <div class="setup-sub">Select your Obsidian vault folder to visualize your knowledge graph on the desktop</div>
+  <button class="setup-btn" id="select-vault-btn">Select Vault Folder</button>
+</div>
+
+<!-- ── Graph SVG ─────────────────────────────────────────────────── -->
+<svg id="graph">
+  <defs>
+    <filter id="glow-a" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.5" result="b"/>
+      <feComposite in="SourceGraphic" in2="b" operator="over"/>
+    </filter>
+    <filter id="glow-b" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feComposite in="SourceGraphic" in2="b" operator="over"/>
+    </filter>
+  </defs>
+  <g id="graph-root">
+    <g id="links-layer"></g>
+    <g id="nodes-layer"></g>
+    <g id="labels-layer"></g>
+  </g>
+</svg>
+
+<!-- ── Panel tab (always visible left edge trigger) ──────────────── -->
+<div id="panel-tab" title="Open panel">
+  <span id="panel-tab-icon">⚙</span>
+</div>
+
+<!-- ── Slide-out left panel ──────────────────────────────────────── -->
+<div id="control-panel">
+  <div class="panel-header">
+    <div class="panel-logo">Graph<span>Widget</span></div>
+    <button id="panel-close-btn" title="Close panel">✕</button>
+  </div>
+  <div class="panel-scroll">
+
+    <div>
+      <div class="section-label">Graph Mode</div>
+      <div style="display:flex;flex-direction:column;gap:3px;">
+        <button class="mode-btn" data-mode="global">🌐 Full Graph</button>
+        <button class="mode-btn active" data-mode="local">🔵 Local Graph</button>
+        <button class="mode-btn" data-mode="focus">🎯 Focus Mode</button>
+      </div>
+    </div>
+
+    <div id="note-search-section">
+      <div class="section-label">Select Note</div>
+      <div class="search-wrap">
+        <input class="search-input" id="file-search" placeholder="Search note…" autocomplete="off">
+        <div id="search-results"></div>
+      </div>
+    </div>
+
+    <div id="depth-section">
+      <div class="section-label">Link Depth</div>
+      <div class="slider-row">
+        <span class="slider-label">Layers</span>
+        <input type="range" id="depth-slider" min="1" max="4" step="1" value="1">
+        <span class="slider-val" id="depth-val">1</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Label Size</div>
+      <div class="slider-row">
+        <span class="slider-label">Font</span>
+        <input type="range" id="font-slider" min="7" max="14" step="1" value="9">
+        <span class="slider-val" id="font-val">9px</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Node Size</div>
+      <div class="slider-row">
+        <span class="slider-label">Scale</span>
+        <input type="range" id="node-slider" min="0.5" max="2.5" step="0.1" value="1">
+        <span class="slider-val" id="node-val">1.0×</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Theme</div>
+      <div class="theme-grid">
+        <div class="theme-dot active" data-theme="default" style="background:linear-gradient(135deg,#7c3aed,#7dd3fc)" title="Default"></div>
+        <div class="theme-dot" data-theme="nebula"  style="background:linear-gradient(135deg,#db2777,#e879f9)" title="Nebula"></div>
+        <div class="theme-dot" data-theme="forest"  style="background:linear-gradient(135deg,#16a34a,#67e8f9)" title="Forest"></div>
+        <div class="theme-dot" data-theme="amber"   style="background:linear-gradient(135deg,#d97706,#fb923c)" title="Amber"></div>
+        <div class="theme-dot" data-theme="ice"     style="background:linear-gradient(135deg,#0284c7,#f0abfc)" title="Ice"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Display</div>
+      <div class="toggle-row">
+        <span class="toggle-label">Show labels</span>
+        <button class="toggle on" id="toggle-labels"></button>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">Always on top</span>
+        <button class="toggle" id="toggle-top"></button>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">Run on startup</span>
+        <button class="toggle" id="toggle-startup"></button>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Actions</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <button class="act-btn" id="refresh-btn">↺ Refresh vault</button>
+        <button class="act-btn danger" id="vault-btn">⌂ Change vault</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Focus sidebar (left, shown in focus mode) ─────────────────── -->
+<div id="focus-sidebar">
+  <div id="focus-header">
+    <div id="focus-note-name">—</div>
+    <div id="focus-note-meta"></div>
+    <button id="focus-open-btn">🔮 Open in Obsidian</button>
+  </div>
+  <div id="focus-tabs">
+    <div class="focus-tab active" data-tab="backlinks">Backlinks</div>
+    <div class="focus-tab" data-tab="outlinks">Links</div>
+    <div class="focus-tab" data-tab="recent">Recent</div>
+  </div>
+  <div id="focus-list"></div>
+</div>
+
+<!-- ── Corner controls (top right) ───────────────────────────────── -->
+<div id="corner-controls">
+  <div class="icon-btn" id="pin-btn" title="Always on top" style="opacity:0.45">📌</div>
+  <div class="icon-btn" id="minimize-btn" title="Minimize">—</div>
+  <div class="icon-btn danger" id="close-btn" title="Close">✕</div>
+</div>
+
+<!-- ── Tooltip ───────────────────────────────────────────────────── -->
+<div id="tooltip">
+  <div class="tt-name" id="tt-name"></div>
+  <div class="tt-meta" id="tt-meta"></div>
+  <div class="tt-tags" id="tt-tags"></div>
+  <div class="tt-actions">
+    <button class="tt-act-btn" id="tt-preview">👁 Preview</button>
+    <button class="tt-act-btn" id="tt-obsidian">🔮 Open</button>
+    <button class="tt-act-btn" id="tt-explorer">📁 Folder</button>
+  </div>
+</div>
+
+<!-- ── Note preview panel (right side) ───────────────────────────── -->
+<div id="note-preview">
+  <div id="preview-header">
+    <div id="preview-title">—</div>
+    <button id="preview-close">✕</button>
+  </div>
+  <div id="preview-meta"></div>
+  <div id="preview-body"></div>
+  <div id="preview-actions">
+    <button class="preview-act-btn accent" id="preview-obsidian">🔮 Open in Obsidian</button>
+    <button class="preview-act-btn" id="preview-explorer">📁 Show in Folder</button>
+  </div>
+</div>
+
+<!-- ── Legend (bottom right, hover-only) ─────────────────────────── -->
+<div id="legend">
+  <div class="leg-item"><div class="leg-dot" style="background:var(--node-default)"></div>Note</div>
+  <div class="leg-item"><div class="leg-dot" style="background:var(--node-center)"></div>Selected</div>
+  <div class="leg-item"><div class="leg-dot" style="background:var(--node-tagged)"></div>Tagged</div>
+  <div class="leg-item" id="leg-recent"><div class="leg-dot" style="background:var(--node-recent)"></div>Recent 7d</div>
+  <div class="leg-item" id="leg-backlink" style="display:none"><div class="leg-dot" style="background:var(--node-backlink)"></div>Backlink</div>
+  <div class="leg-item" id="leg-outlink"  style="display:none"><div class="leg-dot" style="background:var(--node-outlink)"></div>Link out</div>
+</div>
+
+<!-- ── Stats (bottom left, hover-only) ───────────────────────────── -->
+<div id="stats">— notes · — links</div>
+
+<!-- ── Brief status toast ────────────────────────────────────────── -->
+<div id="brief-msg"></div>
+
+<script src="../node_modules/d3/dist/d3.min.js"></script>
+<script src="renderer.js"></script>
+</div>
+</body>
+</html>
