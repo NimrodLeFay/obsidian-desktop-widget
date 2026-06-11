@@ -1,6 +1,6 @@
 {
   "name": "obsidian-graph-widget",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Floating Obsidian graph widget for desktop",
   "main": "main.js",
   "scripts": {
@@ -14,10 +14,10 @@
   "license": "ISC",
   "dependencies": {
     "chokidar": "^5.0.0",
-    "d3": "^7.9.0",
-    "electron": "^42.3.3"
+    "d3": "^7.9.0"
   },
   "devDependencies": {
+    "electron": "^42.3.3",
     "electron-builder": "^26.15.0"
   },
   "build": {
@@ -26,8 +26,19 @@
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
     "win": {
-      "target": "nsis"
+      "target": "portable",
+      "icon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "ObsidianGraphWidget.exe"
     },
     "mac": {
       "target": "dmg",

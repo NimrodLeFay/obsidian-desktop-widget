@@ -15,4 +15,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadPrefs:         ()  => ipcRenderer.invoke('load-prefs'),
   closeApp:          ()  => ipcRenderer.invoke('close-app'),
   minimizeApp:       ()  => ipcRenderer.invoke('minimize-app'),
+  toggleFullscreen:  ()  => ipcRenderer.invoke('toggle-fullscreen'),
+  getFullscreen:     ()  => ipcRenderer.invoke('get-fullscreen'),
+  onFullscreenChange:(cb)=> ipcRenderer.on('fullscreen-changed', (_, v) => cb(v)),
+  onVaultChanged:    (cb)=> ipcRenderer.on('vault-changed', () => cb()),
+  exportPng:         (d) => ipcRenderer.invoke('export-png', d),
+  checkUpdate:       ()  => ipcRenderer.invoke('check-update'),
+  openUrl:           (u) => ipcRenderer.invoke('open-url', u),
 });

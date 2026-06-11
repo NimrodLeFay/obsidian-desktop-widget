@@ -1,6 +1,7 @@
 ﻿node_modules/
 dist/
-build/
+build/*
+!build/icon.ico
 out/
 release/
 *.log

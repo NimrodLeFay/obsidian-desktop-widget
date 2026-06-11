@@ -1,12 +1,25 @@
-const { app, BrowserWindow, ipcMain, screen, dialog, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, dialog, shell, nativeImage, Tray, Menu, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
 let mainWindow;
+let tray = null;
 let vaultPath = null;
 let isAlwaysOnTop = false;
 let panelVisible = true;
+let isQuitting = false;
+const startHidden = process.argv.includes('--hidden');
+
+// ─── Single instance ──────────────────────────────────────────────
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
+  });
+}
 
 // ─── Config ───────────────────────────────────────────────────────
 const configPath = path.join(app.getPath('userData'), 'config.json');
@@ -26,19 +39,38 @@ function saveConfig(data) {
 // ─── Startup registration ─────────────────────────────────────────
 function setStartup(enable) {
   if (process.platform === 'win32') {
+    // Portable build: execPath points to the temp extraction dir —
+    // PORTABLE_EXECUTABLE_FILE holds the real exe path.
+    // Packaged (installer): execPath is the app exe itself.
+    // Dev: execPath is electron.exe — it needs the app folder as argument,
+    // otherwise Windows just launches an empty Electron shell.
+    const exePath = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+    const args = app.isPackaged
+      ? ['--hidden']
+      : [path.resolve(__dirname), '--hidden'];
     app.setLoginItemSettings({
       openAtLogin: enable,
-      path: process.execPath,
-      args: ['--hidden']
+      path: exePath,
+      args
     });
   } else if (process.platform === 'darwin') {
     app.setLoginItemSettings({ openAtLogin: enable });
   }
   saveConfig({ runOnStartup: enable });
+  updateTrayMenu();
 }
 
 function getStartup() {
-  if (process.platform === 'win32' || process.platform === 'darwin') {
+  if (process.platform === 'win32') {
+    // Must query with the same path/args used in setStartup,
+    // otherwise the registry entry is not matched.
+    const exePath = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+    const args = app.isPackaged
+      ? ['--hidden']
+      : [path.resolve(__dirname), '--hidden'];
+    return app.getLoginItemSettings({ path: exePath, args }).openAtLogin;
+  }
+  if (process.platform === 'darwin') {
     return app.getLoginItemSettings().openAtLogin;
   }
   return false;
@@ -113,6 +145,32 @@ function parseVault(vaultDir) {
   return { nodes, links };
 }
 
+// ─── Vault watcher (live refresh) ─────────────────────────────────
+let watcher = null;
+function watchVault(dir) {
+  if (watcher) { try { watcher.close(); } catch (e) {} watcher = null; }
+  if (!dir) return;
+  try {
+    const chokidar = require('chokidar');
+    let debounce = null;
+    watcher = chokidar.watch(dir, {
+      // skip hidden dirs like .obsidian, .git, .trash
+      ignored: (p) => p.split(path.sep).some(seg => seg.startsWith('.')),
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 }
+    });
+    watcher.on('all', (event, p) => {
+      if (!p || !p.endsWith('.md')) return;
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('vault-changed');
+        }
+      }, 800);
+    });
+  } catch (e) { /* watcher is best-effort */ }
+}
+
 // ─── Read single note content (for preview) ──────────────────────
 function readNoteContent(vaultDir, noteId) {
   if (!vaultDir || !noteId) return null;
@@ -137,6 +195,7 @@ ipcMain.handle('select-vault', async () => {
   if (!result.canceled && result.filePaths[0]) {
     vaultPath = result.filePaths[0];
     saveConfig({ vaultPath });
+    watchVault(vaultPath);
     return vaultPath;
   }
   return null;
@@ -179,8 +238,117 @@ ipcMain.handle('get-startup', () => getStartup());
 ipcMain.handle('save-prefs', (_, prefs) => saveConfig({ prefs }));
 ipcMain.handle('load-prefs', () => loadConfig().prefs || {});
 
-ipcMain.handle('close-app', () => app.quit());
-ipcMain.handle('minimize-app', () => mainWindow?.minimize());
+// Close button hides to tray; quitting happens via tray menu
+ipcMain.handle('close-app', () => mainWindow?.hide());
+ipcMain.handle('minimize-app', () => mainWindow?.hide());
+
+ipcMain.handle('toggle-fullscreen', () => {
+  if (!mainWindow) return false;
+  const next = !mainWindow.isFullScreen();
+  mainWindow.setFullScreen(next);
+  return next;
+});
+ipcMain.handle('get-fullscreen', () => mainWindow?.isFullScreen() || false);
+
+// ─── PNG export ───────────────────────────────────────────────────
+ipcMain.handle('export-png', async (_, dataUrl) => {
+  if (!mainWindow || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) return false;
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export graph as PNG',
+    defaultPath: `obsidian-graph-${new Date().toISOString().slice(0, 10)}.png`,
+    filters: [{ name: 'PNG image', extensions: ['png'] }]
+  });
+  if (result.canceled || !result.filePath) return false;
+  try {
+    fs.writeFileSync(result.filePath, Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64'));
+    return true;
+  } catch (e) { return false; }
+});
+
+// ─── Update check (GitHub releases) ───────────────────────────────
+const UPDATE_REPO = 'NimrodLeFay/obsidian-desktop-widget';
+
+function isNewerVersion(latest, current) {
+  const a = latest.split('.').map(Number), b = current.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) > (b[i] || 0)) return true;
+    if ((a[i] || 0) < (b[i] || 0)) return false;
+  }
+  return false;
+}
+
+ipcMain.handle('check-update', async () => {
+  if (UPDATE_REPO.startsWith('__')) return null;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, {
+      headers: { 'User-Agent': 'obsidian-graph-widget', 'Accept': 'application/vnd.github+json' }
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const latest = (j.tag_name || '').replace(/^v/, '');
+    if (!latest) return null;
+    return { latest, current: app.getVersion(), url: j.html_url, newer: isNewerVersion(latest, app.getVersion()) };
+  } catch (e) { return null; }
+});
+
+ipcMain.handle('open-url', (_, url) => {
+  if (typeof url === 'string' && /^https:\/\/github\.com\//.test(url)) shell.openExternal(url);
+});
+
+// ─── Tray ─────────────────────────────────────────────────────────
+function getTrayIcon() {
+  const iconPath = path.join(__dirname, 'assets', 'icon.png');
+  let img = nativeImage.createFromPath(iconPath);
+  if (img.isEmpty()) img = nativeImage.createEmpty();
+  return img.resize({ width: 16, height: 16 });
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  const menu = Menu.buildFromTemplate([
+    {
+      label: mainWindow && mainWindow.isVisible() ? 'Hide widget' : 'Show widget',
+      click: () => toggleWindow()
+    },
+    { type: 'separator' },
+    {
+      label: 'Always on top',
+      type: 'checkbox',
+      checked: isAlwaysOnTop,
+      click: (item) => {
+        isAlwaysOnTop = item.checked;
+        saveConfig({ isAlwaysOnTop });
+        mainWindow?.setAlwaysOnTop(isAlwaysOnTop, isAlwaysOnTop ? 'screen-saver' : 'normal');
+      }
+    },
+    {
+      label: 'Run on startup',
+      type: 'checkbox',
+      checked: getStartup(),
+      click: (item) => setStartup(item.checked)
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit',
+      click: () => { isQuitting = true; app.quit(); }
+    }
+  ]);
+  tray.setContextMenu(menu);
+}
+
+function toggleWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isVisible()) mainWindow.hide();
+  else { mainWindow.show(); mainWindow.focus(); }
+  updateTrayMenu();
+}
+
+function createTray() {
+  tray = new Tray(getTrayIcon());
+  tray.setToolTip('Obsidian Graph Widget');
+  tray.on('click', toggleWindow);
+  updateTrayMenu();
+}
 
 // ─── Window ───────────────────────────────────────────────────────
 function createWindow() {
@@ -203,6 +371,8 @@ function createWindow() {
     skipTaskbar: false,
     hasShadow: false,
     resizable: true,
+    show: !startHidden,
+    icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -217,6 +387,20 @@ function createWindow() {
   // Save window bounds on move/resize
   mainWindow.on('resized', saveBounds);
   mainWindow.on('moved', saveBounds);
+
+  // Hide to tray instead of closing/minimizing
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) { e.preventDefault(); mainWindow.hide(); updateTrayMenu(); }
+  });
+  mainWindow.on('minimize', (e) => {
+    e.preventDefault(); mainWindow.hide(); updateTrayMenu();
+  });
+  mainWindow.on('show', updateTrayMenu);
+  mainWindow.on('hide', updateTrayMenu);
+
+  // Keep renderer in sync with fullscreen state
+  mainWindow.on('enter-full-screen', () => mainWindow.webContents.send('fullscreen-changed', true));
+  mainWindow.on('leave-full-screen', () => mainWindow.webContents.send('fullscreen-changed', false));
 }
 
 function saveBounds() {
@@ -226,6 +410,18 @@ function saveBounds() {
   saveConfig({ winX: x, winY: y, winW: w, winH: h });
 }
 
-app.whenReady().then(createWindow);
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.whenReady().then(() => {
+  createWindow();
+  createTray();
+  watchVault(vaultPath);
+  // Global hotkey: toggle widget visibility
+  globalShortcut.register('Control+Shift+G', toggleWindow);
+});
+app.on('before-quit', () => { isQuitting = true; });
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  if (watcher) { try { watcher.close(); } catch (e) {} }
+});
+// App lives in the tray — don't quit when the window is hidden/closed
+app.on('window-all-closed', () => { if (process.platform !== 'darwin' && isQuitting) app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
